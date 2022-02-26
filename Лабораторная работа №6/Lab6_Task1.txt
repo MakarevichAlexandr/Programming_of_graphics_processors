@@ -1,0 +1,116 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <stdbool.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+#define CUDA_CHECK_RETURN(value) {\
+cudaError_t _m_cudaStat = value;\
+if (_m_cudaStat != cudaSuccess) {\
+	fprintf(stderr, "Error %s at line %d in file %s\n",\
+	cudaGetErrorString(_m_cudaStat),__LINE__,__FILE__);\
+	exit(1);\
+}}
+
+float cuda_host_alloc_test(int size, int niter, bool up)
+{
+	cudaEvent_t start, stop;
+	int *a, *dev_a;
+	float elapsed_time;
+
+	CUDA_CHECK_RETURN(cudaEventCreate(&start)); // Создание объекта события start
+	CUDA_CHECK_RETURN(cudaEventCreate(&stop)); // Создание объекта события stop
+	
+	// Выделение закреплённой памяти
+	CUDA_CHECK_RETURN(cudaHostAlloc((void**)&a, size * sizeof(*a), cudaHostAllocDefault)); // Выделяет закреплённую страницу памяти на хосте
+				//	(указатель устройства на выделенную память, запрошенный размер выделения в байтах, запрашиваемые свойства выделенной памяти)
+	// cudaHostAllocDefault - эквивалентность cudaHostAlloc и cudaMallocHost
+	CUDA_CHECK_RETURN(cudaMalloc((void**)&dev_a, size * sizeof(*dev_a))); // Выделяет память на устройстве
+				// (указатель на выделенную память устройства, запрошенный размер выделения в байтах)
+
+	CUDA_CHECK_RETURN(cudaEventRecord(start, 0)); // Записывает событие start
+
+	for (int i = 0; i < niter; i++) {
+		if (up == true) {
+			CUDA_CHECK_RETURN(cudaMemcpy(dev_a, a, size * sizeof(*a), cudaMemcpyHostToDevice)); // Копирует данные между хостом и устройством
+						// (адрес памяти назначения, адрес источника памяти, размер в байтах для копирования, тип перевода.
+		}
+		else {
+			CUDA_CHECK_RETURN(cudaMemcpy(a, dev_a, size * sizeof(*dev_a), cudaMemcpyDeviceToHost));
+		}
+	}
+
+	CUDA_CHECK_RETURN(cudaEventRecord(stop, 0)); // Записывает событие stop
+	CUDA_CHECK_RETURN(cudaEventSynchronize(stop)); // Ожидание завершения события stop
+	CUDA_CHECK_RETURN(cudaEventElapsedTime(&elapsed_time, start, stop)); // Вычисляет прошедшее время между событиями
+
+	CUDA_CHECK_RETURN(cudaFreeHost(a)); // Освобождает закреплённую страницу памяти
+	CUDA_CHECK_RETURN(cudaFree(dev_a)); // Освобождает память на устройстве
+
+	CUDA_CHECK_RETURN(cudaEventDestroy(start)); // Уничтожает событие start
+	CUDA_CHECK_RETURN(cudaEventDestroy(stop)); // Уничтожает событие stop
+
+	return elapsed_time;
+}
+
+float cuda_malloc_test(int size, int niter, bool up)
+{
+	cudaEvent_t start, stop;
+	int *a, *dev_a;
+	float elapsed_time;
+
+	CUDA_CHECK_RETURN(cudaEventCreate(&start)); // Создание объекта события start
+ 	CUDA_CHECK_RETURN(cudaEventCreate(&stop)); // Создание объекта события stop
+
+	a = (int*)malloc(size * sizeof(*a));
+
+	CUDA_CHECK_RETURN(cudaMalloc((void**)&dev_a, size * sizeof(*dev_a))); // Выделяет память на устройстве
+
+	CUDA_CHECK_RETURN(cudaEventRecord(start, 0)); // Записывает событие start
+
+	for (int i = 0; i < niter; i++) {
+		if (up == true) {
+			CUDA_CHECK_RETURN(cudaMemcpy(dev_a, a, size * sizeof(*a), cudaMemcpyHostToDevice)); // Копирует данные между хостом и устройством
+		}
+		else
+			CUDA_CHECK_RETURN(cudaMemcpy(a, dev_a, size * sizeof(*dev_a), cudaMemcpyDeviceToHost));
+	}
+
+	CUDA_CHECK_RETURN(cudaEventRecord(stop, 0));	// Записывает событие stop
+	CUDA_CHECK_RETURN(cudaEventSynchronize(stop)); // Ожидание завершения события stop
+	CUDA_CHECK_RETURN(cudaEventElapsedTime(&elapsed_time, start, stop)); // Вычисляет прошедшее время между событиями
+
+	free(a);
+	CUDA_CHECK_RETURN(cudaFree(dev_a)); // Освобождает память на устройстве
+	CUDA_CHECK_RETURN(cudaEventDestroy(start)); // Уничтожает событие start
+	CUDA_CHECK_RETURN(cudaEventDestroy(stop)); // Уничтожает событие stop
+
+	return elapsed_time;
+}
+
+int main(int argc, char const *argv[])
+{
+	const int size = (10 * pow(1024, 2));
+	const int niter = 100; // Количество нитей
+	float elapsed_time;
+	float MB = (float)niter * size * sizeof(int) / 1024 / 1024; // Объём данных
+
+	elapsed_time = cuda_malloc_test(size, niter, true);
+	printf("Time using cudaMalloc: %.6f\n", elapsed_time); // Использование выделения памяти обычным образом
+	printf("Speed CPU-->GPU: %.6f MB/s\n\n", MB / (elapsed_time / 1000)); // Host to Device
+
+	elapsed_time = cuda_malloc_test(size, niter, false);
+	printf("Time using cudaMalloc: %.6f\n", elapsed_time);
+	printf("Speed GPU-->CPU: %.6f MB/s\n\n", MB / (elapsed_time / 1000)); // Device to Host
+
+	elapsed_time = cuda_host_alloc_test(size, niter, true);
+	printf("Time using cudaHostAlloc: %.6f\n", elapsed_time); // Использование выделения памяти с использованием закреплённых страниц
+	printf("Speed CPU-->GPU: %.6f MB/s\n\n", MB / (elapsed_time / 1000)); // Host to Device
+
+	elapsed_time = cuda_host_alloc_test(size, niter, false);
+	printf("Time using cudaHostAlloc: %.6f ms\n", elapsed_time);
+	printf("Speed GPU-->CPU: %.6f MB/s\n\n", MB / (elapsed_time / 1000)); // Device to Host
+
+	return 0;
+}
